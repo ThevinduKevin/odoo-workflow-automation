@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+
+    <menuitem id="bi_connecter_root"
+        name="API Connector"
+        web_icon="st_api_connector,/static/description/icon.png"
+        active="True"
+        sequence="100">
+
+        <menuitem id="api_menu"
+            name="API"
+            sequence="10"
+            action="st_api_connector.action_api_connector_action">
+        </menuitem>
+        <menuitem
+            id="token_menu"
+            name="Token"
+            sequence="20"
+            action="st_api_connector.action_token_action"/>
+    </menuitem>
+</odoo>

@@ -1,0 +1,355 @@
+# =============================================================================
+# Project Sync — Automatic Project Board Tracking
+# =============================================================================
+# Keeps the GitHub Project board in sync with your actual workflow:
+#
+#   ┌─────────┐    ┌─────────────┐    ┌───────────┐    ┌──────┐
+#   │  Todo   │ →  │ In Progress │ →  │ In Review │ →  │ Done │
+#   └─────────┘    └─────────────┘    └───────────┘    └──────┘
+#     Issue          Branch              PR               PR
+#     opened         created            opened           merged
+#
+# Events handled:
+#   Issue opened       → Add to board as "Todo" + assign + auto-label
+#   Issue closed       → Move to "Done"
+#   Issue reopened     → Move back to "Todo"
+#   Branch created     → Extract issue # from name → "In Progress"
+#   PR opened          → Assign to author → Move issue to "In Review" + copy labels
+#   PR merged          → Move issue to "Done" + close issue
+#   PR closed (no merge) → Move issue back to "Todo"
+#
+# Branch naming convention (must include issue number):
+#   42-add-login, feature/42-desc, fix/42-bug, issue-42, hotfix/42
+#
+# Required setup:
+#   Secrets:  PROJECT_TOKEN  (PAT with project + repo scope)
+#   Variables: PROJECT_OWNER, PROJECT_NUMBER
+# =============================================================================
+
+name: Project Sync
+
+on:
+  issues:
+    types: [opened, closed, reopened]
+  create:
+  pull_request:
+    types: [opened, closed]
+
+concurrency:
+  group: >-
+    sync-${{ github.event_name }}-${{
+      github.event.issue.number ||
+      github.event.pull_request.number ||
+      github.event.ref
+    }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+  PROJECT_OWNER: ${{ vars.PROJECT_OWNER }}
+  PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Issue Opened → Add to project as "Todo" + assign + auto-label
+  # ---------------------------------------------------------------------------
+  issue-opened:
+    name: "Issue → Todo"
+    if: github.event_name == 'issues' && github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Add to project board as Todo
+        run: |
+          source .github/scripts/project-helpers.sh
+          add_and_set_status "${{ github.event.issue.node_id }}" "Todo"
+
+      - name: Assign to creator
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue edit ${{ github.event.issue.number }} \
+            --repo "${{ github.repository }}" \
+            --add-assignee "${{ github.event.issue.user.login }}" || true
+
+      - name: Auto-label by keywords
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          TEXT=$(echo "${ISSUE_TITLE} ${ISSUE_BODY}" | tr '[:upper:]' '[:lower:]')
+          LABELS=()
+
+          # Match explicit tags first, then keywords
+          echo "$TEXT" | grep -qiE '\[BUG\]|\b(bug|error|crash|broken|not working|regression)\b' && LABELS+=("bug")
+          echo "$TEXT" | grep -qiE '\[FEATURE\]|\b(feature|implement|enhanc(e|ement)|request)\b' && LABELS+=("feature")
+          echo "$TEXT" | grep -qiE '\[DOCS?\]|\b(documentation|readme|guide)\b' && LABELS+=("documentation")
+          echo "$TEXT" | grep -qiE '\b(security|vulnerability|auth|injection|xss)\b' && LABELS+=("security")
+          echo "$TEXT" | grep -qiE '\b(perf(ormance)?|slow|optimi(z|s)(e|ation))\b' && LABELS+=("performance")
+
+          [ ${#LABELS[@]} -eq 0 ] && { echo "No labels matched"; exit 0; }
+
+          declare -A COLORS=(
+            ["bug"]="d73a4a" ["feature"]="a2eeef" ["documentation"]="0075ca"
+            ["security"]="e4e669" ["performance"]="f9d0c4"
+          )
+
+          for LABEL in "${LABELS[@]}"; do
+            gh label create "$LABEL" --repo "$REPO" \
+              --color "${COLORS[$LABEL]}" --force 2>/dev/null || true
+          done
+
+          gh issue edit "$ISSUE_NUMBER" --repo "$REPO" \
+            --add-label "$(IFS=,; echo "${LABELS[*]}")"
+          echo "Labels applied: ${LABELS[*]}"
+
+  # ---------------------------------------------------------------------------
+  # Issue Closed → Move to "Done"
+  # ---------------------------------------------------------------------------
+  issue-closed:
+    name: "Issue → Done"
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move to Done on project board
+        run: |
+          source .github/scripts/project-helpers.sh
+          ensure_status "${{ github.event.issue.node_id }}" "Done"
+
+  # ---------------------------------------------------------------------------
+  # Issue Reopened → Move back to "Todo"
+  # ---------------------------------------------------------------------------
+  issue-reopened:
+    name: "Issue → Todo (reopened)"
+    if: github.event_name == 'issues' && github.event.action == 'reopened'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move to Todo on project board
+        run: |
+          source .github/scripts/project-helpers.sh
+          ensure_status "${{ github.event.issue.node_id }}" "Todo"
+
+  # ---------------------------------------------------------------------------
+  # Branch Created → Move linked issue to "In Progress"
+  # ---------------------------------------------------------------------------
+  branch-created:
+    name: "Branch → In Progress"
+    if: github.event_name == 'create' && github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move linked issue to In Progress
+        env:
+          BRANCH: ${{ github.event.ref }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          source .github/scripts/project-helpers.sh
+
+          ISSUE=$(extract_issue_number_from_branch "$BRANCH")
+          if [ -z "$ISSUE" ]; then
+            echo "No issue number in branch name: $BRANCH — skipping"
+            exit 0
+          fi
+
+          echo "Branch '$BRANCH' → issue #$ISSUE"
+
+          NODE_ID=$(get_issue_node_id "$ISSUE" "$REPO_OWNER" "$REPO_NAME")
+          if [ -z "$NODE_ID" ] || [ "$NODE_ID" = "null" ]; then
+            echo "Issue #$ISSUE not found — skipping"
+            exit 0
+          fi
+
+          STATE=$(gh issue view "$ISSUE" \
+            --repo "${REPO_OWNER}/${REPO_NAME}" \
+            --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+          if [ "$STATE" != "OPEN" ]; then
+            echo "Issue #$ISSUE is $STATE — skipping"
+            exit 0
+          fi
+
+          ensure_status "$NODE_ID" "In Progress"
+
+  # ---------------------------------------------------------------------------
+  # PR Opened → Assign to author, move issue to "In Review", copy labels
+  # ---------------------------------------------------------------------------
+  pr-opened:
+    name: "PR → In Review"
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'opened'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Assign PR to author
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo "${{ github.repository }}" \
+            --add-assignee "${{ github.event.pull_request.user.login }}" || true
+
+      - name: Link issues and move to In Review
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          FULL_REPO: ${{ github.repository }}
+        run: |
+          source .github/scripts/project-helpers.sh
+
+          ISSUES=$(get_linked_issue_numbers \
+            "$PR_NUMBER" "$REPO_OWNER" "$REPO_NAME" "$PR_BRANCH" "$PR_BODY")
+
+          if [ -z "$ISSUES" ]; then
+            echo "No linked issues found"
+            echo "Tip: use 'Closes #42' in PR body or name branch as '42-description'"
+            exit 0
+          fi
+
+          LABELS_FILE=$(mktemp)
+
+          for NUM in $ISSUES; do
+            echo "Processing issue #$NUM..."
+
+            # Assign issue to PR author
+            gh issue edit "$NUM" --repo "$FULL_REPO" \
+              --add-assignee "$PR_AUTHOR" 2>/dev/null || true
+
+            # Move open issues to In Review
+            STATE=$(gh issue view "$NUM" --repo "$FULL_REPO" \
+              --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+
+            if [ "$STATE" = "OPEN" ]; then
+              NODE_ID=$(get_issue_node_id "$NUM" "$REPO_OWNER" "$REPO_NAME")
+              if [ -n "$NODE_ID" ] && [ "$NODE_ID" != "null" ]; then
+                ensure_status "$NODE_ID" "In Review"
+              fi
+            fi
+
+            # Collect labels for propagation
+            gh issue view "$NUM" --repo "$FULL_REPO" \
+              --json labels --jq '.labels[].name' >> "$LABELS_FILE" 2>/dev/null || true
+          done
+
+          # Copy issue labels to PR
+          LABEL_CSV=$(sort -u "$LABELS_FILE" | grep -v '^$' | paste -sd ',' - || echo "")
+          rm -f "$LABELS_FILE"
+
+          if [ -n "$LABEL_CSV" ]; then
+            echo "Copying labels to PR: $LABEL_CSV"
+            gh pr edit "$PR_NUMBER" --repo "$FULL_REPO" \
+              --add-label "$LABEL_CSV" 2>/dev/null || true
+          fi
+
+  # ---------------------------------------------------------------------------
+  # PR Merged → Move issue to "Done" + close it
+  # ---------------------------------------------------------------------------
+  pr-merged:
+    name: "PR merged → Done"
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move issues to Done and close
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+          FULL_REPO: ${{ github.repository }}
+        run: |
+          source .github/scripts/project-helpers.sh
+
+          ISSUES=$(get_linked_issue_numbers \
+            "$PR_NUMBER" "$REPO_OWNER" "$REPO_NAME" "$PR_BRANCH" "$PR_BODY")
+          [ -z "$ISSUES" ] && { echo "No linked issues"; exit 0; }
+
+          for NUM in $ISSUES; do
+            echo "Closing issue #$NUM..."
+            NODE_ID=$(get_issue_node_id "$NUM" "$REPO_OWNER" "$REPO_NAME")
+            if [ -n "$NODE_ID" ] && [ "$NODE_ID" != "null" ]; then
+              ensure_status "$NODE_ID" "Done"
+            fi
+            gh issue close "$NUM" --repo "$FULL_REPO" \
+              --comment "Closed via PR #$PR_NUMBER merge." 2>/dev/null || true
+          done
+
+  # ---------------------------------------------------------------------------
+  # PR Closed (not merged) → Move issue back to "Todo"
+  # ---------------------------------------------------------------------------
+  pr-closed-unmerged:
+    name: "PR closed → Todo"
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Move issues back to Todo
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          source .github/scripts/project-helpers.sh
+
+          ISSUES=$(get_linked_issue_numbers \
+            "$PR_NUMBER" "$REPO_OWNER" "$REPO_NAME" "$PR_BRANCH" "$PR_BODY")
+          [ -z "$ISSUES" ] && { echo "No linked issues"; exit 0; }
+
+          for NUM in $ISSUES; do
+            echo "Moving issue #$NUM back to Todo..."
+            NODE_ID=$(get_issue_node_id "$NUM" "$REPO_OWNER" "$REPO_NAME")
+            if [ -n "$NODE_ID" ] && [ "$NODE_ID" != "null" ]; then
+              ensure_status "$NODE_ID" "Todo"
+            fi
+          done

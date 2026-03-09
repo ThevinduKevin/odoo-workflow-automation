@@ -1,0 +1,35 @@
+# ===========================================
+# Odoo Custom Module .gitignore
+# ===========================================
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+
+# ---------- IDE / Editor ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- OS ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Odoo runtime ----------
+*.log
+filestore/
+sessions/
+
+# ---------- Environment ----------
+.env
+*.env
+venv/
+.venv/

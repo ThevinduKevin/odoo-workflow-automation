@@ -1,0 +1,167 @@
+# =============================================================================
+# CI — Quality Gate
+# =============================================================================
+# Runs automatically on every Pull Request and on pushes to main.
+# Both jobs must pass before a PR can be merged (configure branch protection).
+#
+# Jobs:
+#   lint  — Python lint (ruff) + XML syntax validation     (~30 seconds)
+#   test  — Install the module in a real Odoo instance      (~3 minutes)
+#
+# The test job only runs after lint passes to save CI minutes.
+#
+# Configure versions via repository variables (Settings → Variables):
+#   ODOO_VERSION     — Odoo branch to test against (default: 19.0)
+#   POSTGRES_VERSION — PostgreSQL version (default: 16)
+#   PYTHON_VERSION   — Python version (default: 3.12)
+# =============================================================================
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      odoo_version:
+        description: "Odoo version (branch)"
+        default: "19.0"
+        type: string
+      postgres_version:
+        description: "PostgreSQL version"
+        default: "16"
+        type: string
+      python_version:
+        description: "Python version"
+        default: "3.12"
+        type: string
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ODOO_VERSION: ${{ inputs.odoo_version || vars.ODOO_VERSION || '19.0' }}
+  PG_VERSION: ${{ inputs.postgres_version || vars.POSTGRES_VERSION || '16' }}
+  PY_VERSION: ${{ inputs.python_version || vars.PYTHON_VERSION || '3.12' }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Lint — fast feedback on code quality
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+
+      - name: Install tools
+        run: pip install ruff>=0.11.4 lxml
+
+      - name: Python lint (ruff)
+        run: |
+          ruff check . \
+            --target-version py310 \
+            --select E,F,W,UP,I \
+            --ignore E501,E266,UP031,UP038,FA100 \
+            --per-file-ignores '**/__init__.py:F401' \
+            --output-format github
+
+      - name: XML syntax check
+        run: |
+          ERRORS=0
+          while IFS= read -r xmlfile; do
+            if ! python -c "
+          from lxml import etree
+          try:
+              etree.parse('$xmlfile')
+          except etree.XMLSyntaxError as e:
+              print(f'::error file=$xmlfile::{e}')
+              raise SystemExit(1)
+          " 2>/dev/null; then
+              ERRORS=$((ERRORS + 1))
+            fi
+          done < <(find . -name '*.xml' -not -path './.github/*')
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::error::$ERRORS XML file(s) have syntax errors"
+            exit 1
+          fi
+          echo "All XML files are valid"
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Test — install module in a real Odoo + PostgreSQL environment
+  # ---------------------------------------------------------------------------
+  test:
+    name: Odoo Module Test
+    needs: lint
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:${{ inputs.postgres_version || vars.POSTGRES_VERSION || '16' }}
+        env:
+          POSTGRES_USER: odoo
+          POSTGRES_PASSWORD: odoo
+          POSTGRES_DB: odoo_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout module
+        uses: actions/checkout@v4
+        with:
+          path: ${{ github.event.repository.name }}
+
+      - name: Checkout Odoo Community
+        uses: actions/checkout@v4
+        with:
+          repository: odoo/odoo
+          ref: ${{ env.ODOO_VERSION }}
+          path: odoo
+          depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
+            libpq-dev libjpeg-dev zlib1g-dev
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip wheel
+          pip install -r odoo/requirements.txt
+
+      - name: Install and test module
+        run: |
+          python odoo/odoo-bin \
+            --addons-path=odoo/addons,${{ github.event.repository.name }} \
+            --database=odoo_test \
+            --db_host=localhost \
+            --db_port=5432 \
+            --db_user=odoo \
+            --db_password=odoo \
+            --init=${{ github.event.repository.name }} \
+            --test-enable \
+            --stop-after-init \
+            --log-level=warn \
+            --no-http

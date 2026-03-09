@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+    <!-- Power BI Token List View -->
+    <record id="view_token_list" model="ir.ui.view">
+        <field name="name">view.token.list</field>
+        <field name="model">api.token</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="token"/>
+                <field name="active"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Power BI Token Form View -->
+    <record id="view_token_form" model="ir.ui.view">
+        <field name="name">view.token.form</field>
+        <field name="model">api.token</field>
+        <field name="arch" type="xml">
+            <form>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="token"/>
+                            <field name="active"/>
+                        </group>
+                        <group>
+                            <field name="validity_period"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_token_action" model="ir.actions.act_window">
+        <field name="name">Token</field>
+        <field name="res_model">api.token</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>
