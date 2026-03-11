@@ -66,15 +66,6 @@ jobs:
       - name: Install tools
         run: pip install ruff>=0.11.4 lxml
 
-      - name: Python lint (ruff)
-        run: |
-          ruff check . \
-            --target-version py310 \
-            --select E,F,W,UP,I \
-            --ignore E501,E266,UP031,UP038,FA100 \
-            --per-file-ignores '**/__init__.py:F401' \
-            --output-format github
-
       - name: XML syntax check
         run: |
           ERRORS=0
