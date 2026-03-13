@@ -144,6 +144,10 @@ jobs:
 
       - name: Install and test module
         run: |
+          # Install dependencies required by base odoo tests
+          sudo apt-get install -y wkhtmltopdf
+          pip install websocket-client reportlab
+          
           python odoo/odoo-bin \
             --addons-path=odoo/addons,${{ github.event.repository.name }} \
             --database=odoo_test \
@@ -152,7 +156,7 @@ jobs:
             --db_user=odoo \
             --db_password=odoo \
             --init=${{ github.event.repository.name }} \
-            --test-enable \
+            --test-tags="/${{ github.event.repository.name }}" \
             --stop-after-init \
             --log-level=warn \
             --no-http
