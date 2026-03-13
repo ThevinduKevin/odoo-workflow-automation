@@ -137,11 +137,6 @@ jobs:
             libxml2-dev libxslt1-dev libldap2-dev libsasl2-dev \
             libpq-dev libjpeg-dev zlib1g-dev
 
-      - name: Install Python dependencies
-        run: |
-          pip install --upgrade pip wheel
-          pip install -r odoo/requirements.txt
-
       - name: Install and test module
         run: |
           python odoo/odoo-bin \
