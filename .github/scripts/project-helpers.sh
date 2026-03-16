@@ -13,9 +13,7 @@
 
 set -euo pipefail
 
-# ---------------------------------------------------------------------------
 # Project Data (cached via temp file to survive subshells)
-# ---------------------------------------------------------------------------
 _PROJECT_CACHE_FILE="${TMPDIR:-/tmp}/.gh-project-cache-$$"
 trap 'rm -f "$_PROJECT_CACHE_FILE"' EXIT
 
@@ -86,9 +84,7 @@ get_status_option_id() {
     '.field.options[] | select(.name == $name) | .id'
 }
 
-# ---------------------------------------------------------------------------
 # Project Item Operations
-# ---------------------------------------------------------------------------
 
 add_to_project() {
   local content_id="$1"
@@ -168,9 +164,7 @@ set_status() {
   echo "✓ Item moved to '$status_name'"
 }
 
-# ---------------------------------------------------------------------------
 # Compound Operations
-# ---------------------------------------------------------------------------
 
 add_and_set_status() {
   local content_id="$1"
@@ -207,9 +201,7 @@ ensure_status() {
   fi
 }
 
-# ---------------------------------------------------------------------------
 # Issue Number Extraction
-# ---------------------------------------------------------------------------
 
 extract_issue_number_from_branch() {
   local branch="$1"
