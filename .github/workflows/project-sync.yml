@@ -50,9 +50,7 @@ env:
   PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER }}
 
 jobs:
-  # ---------------------------------------------------------------------------
   # Issue Opened → Add to project as "Todo" + assign + auto-label
-  # ---------------------------------------------------------------------------
   issue-opened:
     name: "Issue → Todo"
     if: github.event_name == 'issues' && github.event.action == 'opened'
@@ -111,9 +109,7 @@ jobs:
             --add-label "$(IFS=,; echo "${LABELS[*]}")"
           echo "Labels applied: ${LABELS[*]}"
 
-  # ---------------------------------------------------------------------------
   # Issue Closed → Move to "Done"
-  # ---------------------------------------------------------------------------
   issue-closed:
     name: "Issue → Done"
     if: github.event_name == 'issues' && github.event.action == 'closed'
@@ -129,9 +125,7 @@ jobs:
           source .github/scripts/project-helpers.sh
           ensure_status "${{ github.event.issue.node_id }}" "Done"
 
-  # ---------------------------------------------------------------------------
   # Issue Reopened → Move back to "Todo"
-  # ---------------------------------------------------------------------------
   issue-reopened:
     name: "Issue → Todo (reopened)"
     if: github.event_name == 'issues' && github.event.action == 'reopened'
@@ -147,9 +141,7 @@ jobs:
           source .github/scripts/project-helpers.sh
           ensure_status "${{ github.event.issue.node_id }}" "Todo"
 
-  # ---------------------------------------------------------------------------
   # Branch Created → Move linked issue to "In Progress"
-  # ---------------------------------------------------------------------------
   branch-created:
     name: "Branch → In Progress"
     if: github.event_name == 'create' && github.event.ref_type == 'branch'
@@ -193,9 +185,7 @@ jobs:
 
           ensure_status "$NODE_ID" "In Progress"
 
-  # ---------------------------------------------------------------------------
   # PR Opened → Assign to author, move issue to "In Review", copy labels
-  # ---------------------------------------------------------------------------
   pr-opened:
     name: "PR → In Review"
     if: >-
@@ -274,9 +264,7 @@ jobs:
               --add-label "$LABEL_CSV" 2>/dev/null || true
           fi
 
-  # ---------------------------------------------------------------------------
   # PR Merged → Move issue to "Done" + close it
-  # ---------------------------------------------------------------------------
   pr-merged:
     name: "PR merged → Done"
     if: >-
@@ -316,9 +304,7 @@ jobs:
               --comment "Closed via PR #$PR_NUMBER merge." 2>/dev/null || true
           done
 
-  # ---------------------------------------------------------------------------
   # PR Closed (not merged) → Move issue back to "Todo"
-  # ---------------------------------------------------------------------------
   pr-closed-unmerged:
     name: "PR closed → Todo"
     if: >-
